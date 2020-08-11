@@ -1,45 +1,58 @@
+import multiprocessing
 from functools import partial
-from random import randrange, randint
+from random import randint
+import itertools
 
+import numpy as np
+import pandas as pd
 from mlxtend.classifier import EnsembleVoteClassifier
 
 from ModelSelection.BaseModel import BaseModel
-import pandas as pd
-import numpy as np
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-import multiprocessing
 
 
 class CustomBaggingClassifier:
-    def __init__(self, df, features_range, voting="hard", verbose=False, scale=False, parallel=True):
+    def __init__(self, voting="hard", verbose=False, parallel=True, target_name='target'):
         self.models = []
         self.temporary_models = []
-        self.df = df
-        self.features_range = features_range
         self.voting = voting
         self.predictions = []
         self.votingClassifier = None
         self.verbose = verbose
         self.parallel = parallel
-        self.scale = scale
-        if scale:
-            self.rescale()
+        self.target_name = target_name
 
-    def __get_models(self):
+    def _get_models(self):
         base_models = []
         for model in self.models:
             base_models.append(model.model)
         return base_models
 
-    def rescale(self):
+    def add_models(self, model, params):
         """
-        Scale input data by using StandardScaler
-        :return: ---
-        """
-        self.scaler = StandardScaler()
-        self.df.iloc[:, self.features_range] = self.scaler.fit_transform(self.df.iloc[:, self.features_range])
+        Create all the possible combinations of the model with given parameters.
+        Usage example:
+            params = {
+                'C': np.logspace(0, 4, num=10),
+                'penalty': ['l1', 'l2'],
+                'solver': ['liblinear', 'saga']
+            }
 
-    def add_model(self, name, model):
+            custom_bagging = CustomBaggingClassifier(verbose=True, parallel=True)
+            custom_bagging.add_models(LogisticRegression, params)
+
+        :param model: The name of the model (passed without calling the constructor) that is intended to be used
+        :param params: key-value pairs of hyperparameters that will be used to generate all the possible models
+        :return: the number of models of the ensemble
+        """
+        if self.votingClassifier is not None:
+            self.votingClassifier = None
+        keys = list(params)
+        for values in itertools.product(*map(params.get, keys)):
+            model_instance = model(**dict(zip(keys, values)))
+            self.temporary_models.append((str(model_instance), model_instance))
+        return len(self.temporary_models)
+
+    def add_model(self, model):
         """
         Add a model to the ensemble
         :param name: name of the model
@@ -48,47 +61,49 @@ class CustomBaggingClassifier:
         """
         if self.votingClassifier is not None:
             self.votingClassifier = None
-        self.temporary_models.append((name, model))
+        self.temporary_models.append((str(model), model))
 
-    def add_single_model(self, temp_model):
-        train_set, oob_set = self.__generate_bootstrap_sample()
-        return BaseModel(temp_model[0], temp_model[1], train_set, oob_set, self.features_range)
+    def _add_single_model(self, Xy, temp_model):
+        train_set, oob_set = self._generate_bootstrap_sample(Xy)
+        return BaseModel(temp_model[0], temp_model[1], train_set, oob_set, self.target_name)
 
-    def commit_models(self):
+    def _commit_models(self, X, y):
         """
         Create the OOB set for each added model
-        :return: ---
         """
+        Xy = pd.concat([X, y], axis=1)
         if self.parallel:
             pool = multiprocessing.Pool(processes=None)
-            self.models = pool.map(self.add_single_model, self.temporary_models)
+            f = partial(self._add_single_model, Xy)
+            self.models = pool.map(f, self.temporary_models)
             pool.close()
             pool.join()
         else:
             for temp_model in self.temporary_models:
-                train_set, oob_set = self.__generate_bootstrap_sample()
-                self.models.append(BaseModel(temp_model[0], temp_model[1], train_set, oob_set, self.features_range))
+                self.models.append(self._add_single_model(Xy, temp_model))
 
-    def train_single(self, single_model):
+    def _train_single(self, single_model):
         X, y = single_model.get_trainset_X_y()
         return single_model.fit(X, y)
 
-    def train_models(self):
+    def fit(self, X, y):
         """
-        Train all the models in the ensemble. It requires commit_models()
+        Train all the models in the ensemble.
         :return: ---
         """
-
+        self._commit_models(X, y)
         if self.parallel:
             pool = multiprocessing.Pool(processes=None)
-            self.models = pool.map(self.train_single, self.models)
+            self.models = pool.map(self._train_single, self.models)
             pool.close()
             pool.join()
         else:
             for model in self.models:
-                self.train_single(model)
+                self._train_single(model)
+        self.votingClassifier = EnsembleVoteClassifier(clfs=self._get_models(), voting=self.voting, refit=False)
+        self.votingClassifier.fit(X, y)
 
-    def predict_single_model(self, X, model):
+    def _predict_single_model(self, X, model):
         return model.name, model.predict(X)
 
     def predict_each_model(self, X):
@@ -102,48 +117,31 @@ class CustomBaggingClassifier:
         predictions = []
         if self.parallel:
             pool = multiprocessing.Pool(processes=None)
-            f = partial(self.predict_single_model, X)
+            f = partial(self._predict_single_model, X)
             predictions = pool.map(f, self.models)
             pool.close()
             pool.join()
         else:
             for model in self.models:
-                predictions.append(self.predict_single_model(model, X))
+                predictions.append(self._predict_single_model(model, X))
         return predictions
 
     def score(self, X, y):
-        if self.votingClassifier is not None:
-            if self.scale:
-                X = self.scaler.fit_transform(X)
-            return self.votingClassifier.score(X, y)
-
-        self.votingClassifier = EnsembleVoteClassifier(clfs=self.__get_models(), voting=self.voting, refit=False)
-        self.votingClassifier.fit(self.df.iloc[:, self.features_range], self.df.target)
-        if self.scale:
-            X = self.scaler.fit_transform(X)
         return self.votingClassifier.score(X, y)
 
     def predict(self, X):
+        # NOT std interface: (X,y)
         """
         Perform a prediction considering the models as an ensemble. NOTE! train_models() must be called before getting the
         predictions
         :param X: input values to be used for predictions
         :return: list of predictions with model name associated
         """
-        if self.votingClassifier is not None:
-            if self.scale:
-                X = self.scaler.fit_transform(X)
-            return self.votingClassifier.predict(X)
-
-        self.votingClassifier = EnsembleVoteClassifier(clfs=self.__get_models(), voting=self.voting, refit=False)
-        self.votingClassifier.fit(self.df.iloc[:, self.features_range], self.df.target)
-        if self.scale:
-            X = self.scaler.fit_transform(X)
         return self.votingClassifier.predict(X)
 
     def get_ensemble_oob_score(self):
         '''
-        !!!---EXPERIMENTAL---!!! Get the OOB score of the ensemble.
+        !!!---EXPERIMENTAL (and still not working, do not use it!)---!!! Get the OOB score of the ensemble.
         :return: the accuracy over the OOB set of the ensemble
         '''
         predictions = []
@@ -164,11 +162,11 @@ class CustomBaggingClassifier:
             ys.append(int(row.target))
         return 1 - np.mean(ys == predictions)
 
-    def get_single_oob(self, model):
+    def _get_single_oob(self, model):
         X_oob, y_oob = model.get_oob_set_X_y()
-        return model.name, model.model.score(X_oob, y_oob)
+        return model.name, model.score(X_oob, y_oob)
 
-    def get_models_oob_score(self):
+    def models_oob_score(self):
         '''
         Computes the OOB score for each model in the ensemble
         :return: list of OOB scores, one for each model in the ensemble
@@ -177,30 +175,29 @@ class CustomBaggingClassifier:
         oob_scores = []
         if self.parallel:
             pool = multiprocessing.Pool(processes=None)
-            oob_scores = pool.map(self.get_single_oob, self.models)
+            oob_scores = pool.map(self._get_single_oob, self.models)
             pool.close()
             pool.join()
         else:
             for model in self.models:
-                X_oob, y_oob = model.get_oob_set_X_y()
-                oob_scores.append((model.name, model.model.score(X_oob, y_oob)))
+                oob_scores.append((self._get_single_oob(model)))
         return oob_scores
 
-    def __ret_accuracy(self, array):
+    def _ret_accuracy(self, array):
         return array[1]
 
-    def get_best_model(self):
+    def best_model(self):
         '''
         Find the best model comparing performances over OOB set
         :return: the model with the best OOB score
         '''
-        performances = self.get_models_oob_score()
-        performances.sort(key=self.__ret_accuracy, reverse=False)
+        performances = self.models_oob_score()
+        performances.sort(key=self._ret_accuracy, reverse=False)
         return performances.pop()
 
-    def __generate_bootstrap_sample(self):
-        df_boot = self.df.sample(n=self.df.shape[0], replace=True, random_state=randint(0, 10000))
-        oob = pd.concat([df_boot, self.df]).drop_duplicates(keep=False)
+    def _generate_bootstrap_sample(self, X):
+        df_boot = X.sample(n=X.shape[0], replace=True, random_state=randint(0, 10000))
+        oob = pd.concat([df_boot, X]).drop_duplicates(keep=False)
         if self.verbose is True:
             print("OOB set size: %.2f" % float(oob.shape[0] / df_boot.shape[0] * 100), "%")
             print("OOB set abs.:   %i" % oob.shape[0])

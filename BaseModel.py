@@ -1,18 +1,18 @@
 class BaseModel:
-    def __init__(self, name, model, trainset, oobset, features_range):
+    def __init__(self, name, model, trainset, oobset, target_name='target'):
         self.name  = name
         self.model = model
         self.trainset = trainset
         self.oobset = oobset
-        self.features_range = features_range
+        self.target_name = target_name
 
     def get_oob_set_X_y(self):
-        X = self.oobset.iloc[:, self.features_range]
+        X = self.oobset.drop(self.target_name, axis=1)
         y = self.oobset.target
         return X, y
 
     def get_trainset_X_y(self):
-        X = self.trainset.iloc[:, self.features_range]
+        X = self.trainset.drop(self.target_name, axis=1)
         y = self.trainset.target
         return X, y
 
@@ -22,3 +22,6 @@ class BaseModel:
 
     def predict(self, X):
         return self.model.predict(X)
+
+    def score(self, X, y):
+        return self.model.score(X, y)
