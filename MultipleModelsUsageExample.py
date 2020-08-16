@@ -10,11 +10,11 @@ from sklearn.tree import DecisionTreeClassifier
 
 from ModelSelection.CustomBaggingClassifier import CustomBaggingClassifier
 
-df = load_breast_cancer(as_frame=True)
-# df = load_wine(as_frame=True)
+# df = load_breast_cancer(as_frame=True)
+df = load_wine(as_frame=True)
 
-features_range = range(30)
-# features_range = range(13)
+# features_range = range(30)
+features_range = range(13)
 
 scaler = StandardScaler()
 df.data.iloc[:, features_range] = scaler.fit_transform(df.data.iloc[:, features_range])
@@ -58,13 +58,14 @@ n_models = custom_bagging.add_models(SVC, params)
 print("Number of models added: %i" % n_models)
 
 custom_bagging.fit(X_train, y_train)
-performances = custom_bagging.models_oob_score()
+performances = custom_bagging.models_oob_score(X_train, y_train)
 performances_val = []
 for performance in performances:
     print("Model %s OOB accuracy: %.10f" % (performance[0], performance[1]))
     performances_val.append(performance[1])
-best_model = custom_bagging.best_model()
+best_model = custom_bagging.best_model(X_train, y_train)
 print("Best model %s with %.10f OOB accuracy" % (best_model[0], best_model[1]))
-print("Average performance of the models over the OOB set: %.10f" % (float(reduce(lambda a, b: a + b, performances_val)) / len(performances_val)))
+print("Average performance of the models over the OOB set: %.10f" % (float(reduce(lambda a, b: a + b, performances_val))
+                                                                     / len(performances_val)))
 print("Ensemble test accuracy: %.10f" % custom_bagging.score(X_test, y_test))
 
