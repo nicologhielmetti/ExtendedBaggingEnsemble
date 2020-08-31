@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 from mlxtend.classifier import EnsembleVoteClassifier
 
-from ModelSelection.BaseModel import BaseModel
 from ModelSelection.BaseModelIdx import BaseModelIdx
 
 
@@ -59,33 +58,37 @@ class CustomBaggingClassifier:
         Add a model to the ensemble
         :param model: instance of the model
         :return: ---
+        See also :add_models.
         """
         if self.votingClassifier is not None:
             self.votingClassifier = None
         self.temporary_models.append((str(model), model))
+        return len(self.temporary_models)
 
-    def _commit_single_model(self, Xy, temp_model):
+    def _commit_single_model(self, n_samples, temp_model):
         """
         train_set, oob_set = self._generate_bootstrap_sample(Xy)
         return BaseModel(temp_model[0], temp_model[1], train_set, oob_set, self.target_name)
         """
-        sampled_idx, unsampled_idx = self._generate_indexes(len(self.temporary_models), Xy.shape[0])
+        sampled_idx, unsampled_idx = self._generate_indexes(len(self.temporary_models), n_samples)
         return BaseModelIdx(temp_model[0], temp_model[1], sampled_idx, unsampled_idx, self.target_name)
 
     def _commit_models(self, X, y):
         """
-        Create the OOB set for each added model
+        Create indexes sets for train and oob validation sets.
         """
-        Xy = pd.concat([X, y], axis=1)
+        if X.shape[0] != y.shape[0]:
+            raise ValueError('It seems that target values (y) are not the same as feature values (X)')
+
         if self.parallel:
             pool = multiprocessing.Pool(processes=None)
-            f = partial(self._commit_single_model, Xy)
+            f = partial(self._commit_single_model, X.shape[0])
             self.models = pool.map(f, self.temporary_models)
             pool.close()
             pool.join()
         else:
             for temp_model in self.temporary_models:
-                self.models.append(self._commit_single_model(Xy, temp_model))
+                self.models.append(self._commit_single_model(X.shape[0], temp_model))
 
     def _fit_single_model(self, X, y, single_model):
         return single_model.fit(X, y)
@@ -93,9 +96,11 @@ class CustomBaggingClassifier:
     def fit(self, X, y):
         """
         Train all the models in the ensemble.
+        :param X: Features values of trainset
+        :param y: Target values of trainset
         :return: ---
         """
-        self._commit_models(X, y)
+        # self._commit_models(X, y)
         if self.parallel:
             pool = multiprocessing.Pool(processes=None)
             f = partial(self._fit_single_model, X, y)
@@ -113,12 +118,12 @@ class CustomBaggingClassifier:
 
     def predict_each_model(self, X):
         """
-        Perform a prediction for each model in the ensemble. NOTE! train_models() must be called before getting the
-        predictions
-        :param X: input values to be used for predictions
-        :return: list of predictions with model name associated
+        Perform a prediction for each model in the ensemble. NOTE! fit(X,y) is required before.
+        :param X: Features dataframe to be used for predictions
+        :return: List of predictions with model name associated
         """
-
+        if len(self.models) == 0:
+            raise ValueError('Probably fit(X,y) method was not called before. Call it!')
         predictions = []
         if self.parallel:
             pool = multiprocessing.Pool(processes=None)
@@ -132,6 +137,12 @@ class CustomBaggingClassifier:
         return predictions
 
     def score(self, X, y):
+        """
+        Get the score given X as features values and y as target values. Useful for validation/testing purposes.
+        :param X: Features dataframe of trainset
+        :param y: Target dataframe of trainset
+        :return: score
+        """
         return self.votingClassifier.score(X, y)
 
     def predict(self, X):
@@ -176,13 +187,13 @@ class CustomBaggingClassifier:
         performances.sort(key=self._ret_accuracy, reverse=False)
         return performances.pop()
 
-    def _generate_bootstrap_sample(self, X):
+    '''def _generate_bootstrap_sample(self, X):
         df_boot = X.sample(n=X.shape[0], replace=True, random_state=randint(0, 10000))
         oob = pd.concat([df_boot, X]).drop_duplicates(keep=False)
         if self.verbose is True:
             print("OOB set size: %.2f" % float(oob.shape[0] / df_boot.shape[0] * 100), "%")
             print("OOB set abs.:   %i" % oob.shape[0])
-        return df_boot, oob
+        return df_boot, oob'''
 
     def _generate_indexes(self, num_models, n_samples):
         rand_state = randint(0, num_models)

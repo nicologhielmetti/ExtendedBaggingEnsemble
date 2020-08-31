@@ -10,11 +10,11 @@ from sklearn.tree import DecisionTreeClassifier
 
 from ModelSelection.CustomBaggingClassifier import CustomBaggingClassifier
 
-# df = load_breast_cancer(as_frame=True)
-df = load_wine(as_frame=True)
+df = load_breast_cancer(as_frame=True)
+# df = load_wine(as_frame=True)
 
-# features_range = range(30)
-features_range = range(13)
+features_range = range(30)
+# features_range = range(13)
 
 scaler = StandardScaler()
 df.data.iloc[:, features_range] = scaler.fit_transform(df.data.iloc[:, features_range])
@@ -36,27 +36,29 @@ params = {
     'penalty': ['l1', 'l2'],
     'solver': ['liblinear', 'saga']
 }
-
-custom_bagging.add_models(LogisticRegression, params)
+lr = custom_bagging.add_models(LogisticRegression, params)
+print("Number of LR models: %i" % lr)
 
 params = {
-    'max_depth': list(range(1, 100, 1)),
+    'max_depth': list(range(1, 20, 1)),
     'criterion': ['gini', 'entropy'],
 }
 
-custom_bagging.add_models(DecisionTreeClassifier, params)
+dt = custom_bagging.add_models(DecisionTreeClassifier, params) - lr
+print("Number of DT models: %i" % dt)
 
-custom_bagging.add_model(GaussianNB())
+nb = custom_bagging.add_model(GaussianNB()) - dt - lr
+print("Number of NB models: %i" % nb)
 
 params = {
-    'C': np.linspace(0.01, 4, num=50),
+    'C': np.linspace(0.01, 4, num=5),
     'kernel': ["linear", "poly", "rbf", "sigmoid"]
 }
 
-n_models = custom_bagging.add_models(SVC, params)
-
-print("Number of models added: %i" % n_models)
-
+svm = custom_bagging.add_models(SVC, params) - nb - dt - lr
+print("Number of SVM models: %i" % svm)
+print("Total models: %i" % (svm + nb + dt + lr))
+'''
 custom_bagging.fit(X_train, y_train)
 performances = custom_bagging.models_oob_score(X_train, y_train)
 performances_val = []
@@ -68,4 +70,4 @@ print("Best model %s with %.10f OOB accuracy" % (best_model[0], best_model[1]))
 print("Average performance of the models over the OOB set: %.10f" % (float(reduce(lambda a, b: a + b, performances_val))
                                                                      / len(performances_val)))
 print("Ensemble test accuracy: %.10f" % custom_bagging.score(X_test, y_test))
-
+'''
