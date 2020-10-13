@@ -11,7 +11,7 @@ from mlxtend.classifier import EnsembleVoteClassifier
 from ModelSelection.BaseModelIdx import BaseModelIdx
 
 
-class CustomBaggingClassifier:
+class ExtendedBaggingClassifier:
     def __init__(self, voting="hard", verbose=False, parallel=True, target_name='target'):
         self.models = []
         self.temporary_models = []
